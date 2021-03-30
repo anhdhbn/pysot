@@ -161,7 +161,7 @@ class AttentionLayer(nn.Module):
         k = with_pos_embed(search, pos_search)
         v = search
 
-        attn_out, attn_output_weights = self.self_attention(query=q, key=k, value=v)
+        attn_out, attn_output_weights = self.attention(query=q, key=k, value=v)
         x = self.norm_sa(self.dropout_sa(attn_out) + kernel) # q or kernel
 
         # Add skip connection, run through normalization and finally dropout
@@ -170,45 +170,63 @@ class AttentionLayer(nn.Module):
         return out
 
 class Attention(nn.Module):
-    def __init__(self, attn_layer: nn.Module, num_layers: int):
+    def __init__(self, attn_layer: nn.Module, num_layers: int, hidden_dims: int, out_channels:int):
         super(Attention, self).__init__()
         self.layers = getClones(attn_layer, num_layers)
 
+        self.head = nn.Sequential(
+            nn.Conv2d(hidden_dims, hidden_dims, kernel_size=1, bias=False),
+            nn.BatchNorm2d(hidden_dims),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(hidden_dims, out_channels, kernel_size=1)
+        )
+        
     def forward(self, 
                 kernel: Tensor, 
                 search: Tensor,
                 pos_kernel: Tensor,
-                pos_search: Tensor) -> Tensor:
+                pos_search: Tensor,
+                template_size) -> Tensor:
         out = kernel
         for layer in self.layers:
             out = layer(out, search, pos_kernel, pos_search)
+        
+        # 49, 32, 256 => 32, 256, 7, 7
+        hw, bs, c = out.shape
+        h , w = template_size
+        out = out.permute(1, 2, 0).view(bs, c, h, w)
+        out = self.head(out)
         return out
 
 class AttnRPN(RPN):
     def __init__(self, attention_layer, hidden_dims, num_layers, anchor_num=5, in_channels=256, out_channels=256):
         super(AttnRPN, self).__init__()
-        self.cls = Attention(attention_layer, num_layers)
-        self.loc = Attention(attention_layer, num_layers)
+        self.cls = Attention(attention_layer, num_layers, hidden_dims, anchor_num*2)
+        self.loc = Attention(attention_layer, num_layers, hidden_dims, anchor_num*4)
 
         self.embedding = PositionEmbeddingSine(hidden_dims // 2)
 
     def forward(self, z_f, x_f):
+        # z_f [32, 256, 7, 7]
+        # x_f [32, 256, 31, 31]
         bs, c, h, w = z_f.shape
 
         (pos_zf, _) = self.embedding(z_f)
-        (pos_xf, _) = self.embedding(z_f)
+        (pos_xf, _) = self.embedding(x_f)
 
-        template = z_f.flatten(2).permute(2, 0, 1) # HWxNxC
-        search = x_f.flatten(2).permute(2, 0, 1) # HWxNxC
+        template = z_f.flatten(2).permute(2, 0, 1) # HWxNxC [49, 32, 256]
+        search = x_f.flatten(2).permute(2, 0, 1) # HWxNxC [961, 32, 256]
 
         pos_template = pos_zf.flatten(2).permute(2, 0, 1) # HWxNxC
         pos_search = pos_xf.flatten(2).permute(2, 0, 1) # HWxNxC
 
-        cls = self.cls(template, search, pos_template, pos_search)
-        loc = self.loc(template, search, pos_template, pos_search)
+        cls = self.cls(template, search, pos_template, pos_search, [h, w])
+        loc = self.loc(template, search, pos_template, pos_search, [h, w])
 
-        # reshape ...
-        
+        # print(template.shape, search.shape, cls.shape, loc.shape)
+        # exit(0)
+        # # reshape ...
+
         return cls, loc
 
 class MultiAttnRPN(RPN):

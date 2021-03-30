@@ -144,8 +144,8 @@ class TrkDataset(Dataset):
 
         desired_size = (cfg.TRAIN.SEARCH_SIZE - cfg.TRAIN.EXEMPLAR_SIZE) / \
             cfg.ANCHOR.STRIDE + 1 + cfg.TRAIN.BASE_SIZE
-        if desired_size != cfg.TRAIN.OUTPUT_SIZE:
-            raise Exception('size not match!')
+        # if desired_size != cfg.TRAIN.OUTPUT_SIZE:
+        #     raise Exception('size not match!')
 
         # create anchor target
         self.anchor_target = AnchorTarget()
