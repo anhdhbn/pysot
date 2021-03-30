@@ -138,6 +138,7 @@ def with_pos_embed(tensor: Tensor, pos: Optional[Tensor]):
 
 def getClones(module: nn.Module, N: int) -> nn.ModuleList:
     return nn.ModuleList([deepcopy(module) for _ in range(N)])
+
 class AttentionLayer(nn.Module):
     def __init__(self, hidden_dims: int, num_heads:int, dropout: float, dim_feedforward: int):
         super(AttentionLayer, self).__init__()
@@ -183,22 +184,34 @@ class Attention(nn.Module):
             out = layer(out, search, pos_kernel, pos_search)
         return out
 
-class Tr2RPN(RPN):
+class AttnRPN(RPN):
     def __init__(self, attention_layer, hidden_dims, num_layers, anchor_num=5, in_channels=256, out_channels=256):
-        super(Tr2RPN, self).__init__()
+        super(AttnRPN, self).__init__()
         self.cls = Attention(attention_layer, num_layers)
         self.loc = Attention(attention_layer, num_layers)
 
         self.embedding = PositionEmbeddingSine(hidden_dims // 2)
 
     def forward(self, z_f, x_f):
+        bs, c, h, w = z_f.shape
+
         (pos_zf, _) = self.embedding(z_f)
         (pos_xf, _) = self.embedding(z_f)
-        cls = self.cls(z_f, x_f, pos_zf, pos_xf)
-        loc = self.loc(z_f, x_f, pos_zf, pos_xf)
+
+        template = z_f.flatten(2).permute(2, 0, 1) # HWxNxC
+        search = x_f.flatten(2).permute(2, 0, 1) # HWxNxC
+
+        pos_template = pos_zf.flatten(2).permute(2, 0, 1) # HWxNxC
+        pos_search = pos_xf.flatten(2).permute(2, 0, 1) # HWxNxC
+
+        cls = self.cls(template, search, pos_template, pos_search)
+        loc = self.loc(template, search, pos_template, pos_search)
+
+        # reshape ...
+        
         return cls, loc
 
-class MultiTrRPN(RPN):
+class MultiAttnRPN(RPN):
     def __init__(self, 
                 anchor_num, 
                 in_channels, 
@@ -208,13 +221,13 @@ class MultiTrRPN(RPN):
                 num_layers=6,
                 dim_feed_forward=1024,
                 dropout=0.1):
-        super(MultiTrRPN, self).__init__()
+        super(MultiAttnRPN, self).__init__()
         attention_layer = AttentionLayer(hidden_dims, num_heads, dropout, dim_feed_forward)
 
         self.weighted = weighted
         for i in range(len(in_channels)):
-            self.add_module('tr2rpn'+str(i+2),
-                    Tr2RPN(attention_layer, hidden_dims, num_layers, anchor_num, in_channels[i], in_channels[i]))
+            self.add_module('attnrpn'+str(i+2),
+                    AttnRPN(attention_layer, hidden_dims, num_layers, anchor_num, in_channels[i], in_channels[i]))
         if self.weighted:
             self.cls_weight = nn.Parameter(torch.ones(len(in_channels)))
             self.loc_weight = nn.Parameter(torch.ones(len(in_channels)))
@@ -223,7 +236,7 @@ class MultiTrRPN(RPN):
         cls = []
         loc = []
         for idx, (z_f, x_f) in enumerate(zip(z_fs, x_fs), start=2):
-            rpn = getattr(self, 'tr2rpn'+str(idx))
+            rpn = getattr(self, 'attnrpn'+str(idx))
             c, l = rpn(z_f, x_f)
             cls.append(c)
             loc.append(l)
