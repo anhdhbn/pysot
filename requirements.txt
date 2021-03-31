@@ -7,3 +7,4 @@ colorama
 cython
 tensorboardX
 got10k
+pytz
