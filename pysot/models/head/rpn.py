@@ -190,7 +190,7 @@ class AttentionLayer(nn.Module):
         return out
 
 class Attention(nn.Module):
-    def __init__(self, attn_layer: nn.Module, num_layers: int, hidden_dims: int, out_channels:int):
+    def __init__(self, attn_layer: nn.Module, num_layers: int, hidden_dims: int, out_channels:int, template_as_query: bool):
         super(Attention, self).__init__()
         self.layers = getClones(attn_layer, num_layers)
 
@@ -200,36 +200,41 @@ class Attention(nn.Module):
             nn.ReLU(inplace=True),
             nn.Conv2d(hidden_dims, out_channels, kernel_size=1)
         )
+        self.template_as_query = template_as_query
         
     def forward(self, 
                 kernel: Tensor, 
                 search: Tensor,
                 pos_kernel: Tensor,
                 pos_search: Tensor,
-                template_size) -> Tensor:
-        out = kernel
+                size) -> Tensor:
+        out = kernel if self.template_as_query else search
         for layer in self.layers:
-            out = layer(out, search, pos_kernel, pos_search)
+            if self.template_as_query:
+                out = layer(out, search, pos_kernel, pos_search)
+            else:
+                out = layer(kernel, out, pos_kernel, pos_search)
         
         # 49, 32, 256 => 32, 256, 7, 7
         hw, bs, c = out.shape
-        h , w = template_size
+        h , w = size
         out = out.permute(1, 2, 0).view(bs, c, h, w)
         out = self.head(out)
         return out
 
 class AttnRPN(RPN):
-    def __init__(self, attention_layer, hidden_dims, num_layers, anchor_num=5, in_channels=256, out_channels=256):
+    def __init__(self, attention_layer, hidden_dims, num_layers, anchor_num=5, template_as_query=True):
         super(AttnRPN, self).__init__()
-        self.cls = Attention(attention_layer, num_layers, hidden_dims, anchor_num*2)
-        self.loc = Attention(attention_layer, num_layers, hidden_dims, anchor_num*4)
+        self.cls = Attention(attention_layer, num_layers, hidden_dims, anchor_num*2, template_as_query)
+        self.loc = Attention(attention_layer, num_layers, hidden_dims, anchor_num*4, template_as_query)
 
         self.embedding = PositionEmbeddingSine(hidden_dims // 2)
+        self.template_as_query = template_as_query
 
     def forward(self, z_f, x_f):
         # z_f [32, 256, 7, 7]
         # x_f [32, 256, 31, 31]
-        bs, c, h, w = z_f.shape
+        bs, c, h, w = z_f.shape if self.template_as_query else x_f.shape
 
         (pos_zf, _) = self.embedding(z_f)
         (pos_xf, _) = self.embedding(x_f)
@@ -242,10 +247,6 @@ class AttnRPN(RPN):
 
         cls = self.cls(template, search, pos_template, pos_search, [h, w])
         loc = self.loc(template, search, pos_template, pos_search, [h, w])
-
-        # print(template.shape, search.shape, cls.shape, loc.shape)
-        # exit(0)
-        # # reshape ...
 
         return cls, loc
 
@@ -266,7 +267,7 @@ class MultiAttnRPN(RPN):
         self.weighted = weighted
         for i in range(len(in_channels)):
             self.add_module('attnrpn'+str(i+2),
-                    AttnRPN(attention_layer, hidden_dims, num_layers, anchor_num, in_channels[i], in_channels[i]))
+                    AttnRPN(attention_layer, hidden_dims, num_layers, anchor_num, template_as_query))
         if self.weighted:
             self.cls_weight = nn.Parameter(torch.ones(len(in_channels)))
             self.loc_weight = nn.Parameter(torch.ones(len(in_channels)))
