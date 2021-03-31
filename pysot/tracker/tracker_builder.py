@@ -9,11 +9,13 @@ from pysot.core.config import cfg
 from pysot.tracker.siamrpn_tracker import SiamRPNTracker
 from pysot.tracker.siammask_tracker import SiamMaskTracker
 from pysot.tracker.siamrpnlt_tracker import SiamRPNLTTracker
+from pysot.tracker.siamattnrpn_tracker import SiamAttnRPNTracker
 
 TRACKS = {
           'SiamRPNTracker': SiamRPNTracker,
           'SiamMaskTracker': SiamMaskTracker,
-          'SiamRPNLTTracker': SiamRPNLTTracker
+          'SiamRPNLTTracker': SiamRPNLTTracker,
+          'SiamAttnRPNTracker': SiamAttnRPNTracker
          }
 
 
