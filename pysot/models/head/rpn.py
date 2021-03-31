@@ -140,7 +140,7 @@ def getClones(module: nn.Module, N: int) -> nn.ModuleList:
     return nn.ModuleList([deepcopy(module) for _ in range(N)])
 
 class AttentionLayer(nn.Module):
-    def __init__(self, hidden_dims: int, num_heads:int, dropout: float, dim_feedforward: int):
+    def __init__(self, hidden_dims: int, num_heads:int, dropout: float, dim_feedforward: int, template_as_query: True):
         super(AttentionLayer, self).__init__()
         self.attention = nn.MultiheadAttention(hidden_dims, num_heads, dropout=dropout)
         self.dropout_sa = nn.Dropout(dropout)
@@ -155,14 +155,34 @@ class AttentionLayer(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(dim_feedforward, hidden_dims),
         )
+        self.template_as_query = template_as_query
 
     def forward(self, kernel, search, pos_kernel, pos_search):
+        if self.template_as_query:
+            return self.forward_template_as_query(kernel, search, pos_kernel, pos_search)
+        else:
+            return self.forward_search_as_query(kernel, search, pos_kernel, pos_search)
+
+    def forward_template_as_query(self, kernel, search, pos_kernel, pos_search):
         q = with_pos_embed(kernel, pos_kernel)
         k = with_pos_embed(search, pos_search)
         v = search
 
         attn_out, attn_output_weights = self.attention(query=q, key=k, value=v)
         x = self.norm_sa(self.dropout_sa(attn_out) + kernel) # q or kernel
+
+        # Add skip connection, run through normalization and finally dropout
+        forward = self.feed_forward(x)
+        out = self.norm_ff(self.dropout_ff(forward) + x)
+        return out
+
+    def forward_search_as_query(self, kernel, search, pos_kernel, pos_search):
+        q = with_pos_embed(search, pos_search)
+        k = with_pos_embed(kernel, pos_kernel)
+        v = kernel
+
+        attn_out, attn_output_weights = self.attention(query=q, key=k, value=v)
+        x = self.norm_sa(self.dropout_sa(attn_out) + search) # q or kernel
 
         # Add skip connection, run through normalization and finally dropout
         forward = self.feed_forward(x)
@@ -238,9 +258,10 @@ class MultiAttnRPN(RPN):
                 num_heads=8,
                 num_layers=6,
                 dim_feed_forward=1024,
-                dropout=0.1):
+                dropout=0.1,
+                template_as_query=True):
         super(MultiAttnRPN, self).__init__()
-        attention_layer = AttentionLayer(hidden_dims, num_heads, dropout, dim_feed_forward)
+        attention_layer = AttentionLayer(hidden_dims, num_heads, dropout, dim_feed_forward, template_as_query)
 
         self.weighted = weighted
         for i in range(len(in_channels)):
