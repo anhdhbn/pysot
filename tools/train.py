@@ -32,6 +32,10 @@ from pysot.models.model_builder import ModelBuilder
 from pysot.datasets.dataset import TrkDataset
 from pysot.core.config import cfg
 
+from datetime import datetime
+from pytz import timezone
+
+today = datetime.now().astimezone(timezone('Asia/Ho_Chi_Minh')).strftime("%Y-%m-%d_%H-%M-%S")
 
 logger = logging.getLogger('global')
 parser = argparse.ArgumentParser(description='siamrpn tracking')
@@ -260,8 +264,9 @@ def main():
     # load cfg
     cfg.merge_from_file(args.cfg)
     if rank == 0:
+        log_dir = os.path.join(cfg.TRAIN.LOG_DIR, today)
         if not os.path.exists(cfg.TRAIN.LOG_DIR):
-            os.makedirs(cfg.TRAIN.LOG_DIR)
+            os.makedirs(log_dir)
         init_log('global', logging.INFO)
         if cfg.TRAIN.LOG_DIR:
             add_file_handler('global',
@@ -282,7 +287,7 @@ def main():
 
     # create tensorboard writer
     if rank == 0 and cfg.TRAIN.LOG_DIR:
-        tb_writer = SummaryWriter(cfg.TRAIN.LOG_DIR)
+        tb_writer = SummaryWriter(log_dir)
     else:
         tb_writer = None
 
