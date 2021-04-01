@@ -8,3 +8,4 @@ cython
 tensorboardX
 got10k
 pytz
+tensorboard
