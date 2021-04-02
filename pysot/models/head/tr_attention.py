@@ -7,17 +7,10 @@ from copy import deepcopy
 from pysot.models.head.embedding import PositionEmbeddingSine
 from pysot.models.head.rpn import RPN
 
-def with_pos_embed(tensor: Tensor, pos: Optional[Tensor]):
-    return tensor if pos is None else tensor + pos
-
-def getClones(module: nn.Module, N: int) -> nn.ModuleList:
-    return nn.ModuleList([deepcopy(module) for _ in range(N)])
-
-def clone_module(module: nn.Module) -> nn.Module:
-    return deepcopy(module)
+from pysot.models.head.attention import with_pos_embed, getClones, clone_module
 
 class AttentionLayer(nn.Module):
-    def __init__(self, hidden_dims: int, num_heads:int, dropout: float, dim_feedforward: int, template_as_query: True):
+    def __init__(self, hidden_dims: int, num_heads:int, dropout: float, dim_feedforward: int):
         super(AttentionLayer, self).__init__()
         self.attention = nn.MultiheadAttention(hidden_dims, num_heads, dropout=dropout)
         self.dropout_sa = nn.Dropout(dropout)
@@ -32,44 +25,57 @@ class AttentionLayer(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(dim_feedforward, hidden_dims),
         )
-        self.template_as_query = template_as_query
 
-    def forward(self, kernel, search, pos_kernel, pos_search):
-        if self.template_as_query:
-            return self.forward_template_as_query(kernel, search, pos_kernel, pos_search)
-        else:
-            return self.forward_search_as_query(kernel, search, pos_kernel, pos_search)
-
-    def forward_template_as_query(self, kernel, search, pos_kernel, pos_search):
-        q = with_pos_embed(kernel, pos_kernel)
-        k = with_pos_embed(search, pos_search)
-        v = search
-
+    def forward(self, q: Tensor, k: Tensor, v: Tensor, src: Tensor):
         attn_out, attn_output_weights = self.attention(query=q, key=k, value=v)
-        x = self.norm_sa(self.dropout_sa(attn_out) + kernel) # q or kernel
+        x = self.norm_sa(self.dropout_sa(attn_out) + src) # q or kernel
 
         # Add skip connection, run through normalization and finally dropout
         forward = self.feed_forward(x)
         out = self.norm_ff(self.dropout_ff(forward) + x)
         return out
 
-    def forward_search_as_query(self, kernel, search, pos_kernel, pos_search):
-        q = with_pos_embed(search, pos_search)
-        k = with_pos_embed(kernel, pos_kernel)
-        v = kernel
+class EncodeDecodeLayer(nn.Module):
+    def __init__(self, attention_layer: nn.Module):
+        super(EncodeDecodeLayer, self).__init__()
+        self.template_attn = clone_module(attention_layer)
+        self.search_attn = clone_module(attention_layer)
+        self.attn = clone_module(attention_layer)
 
-        attn_out, attn_output_weights = self.attention(query=q, key=k, value=v)
-        x = self.norm_sa(self.dropout_sa(attn_out) + search) # q or kernel
+    def forward(self,
+                template: Tensor, 
+                search: Tensor,
+                pos_template: Tensor,
+                pos_search: Tensor
+            ):
+        q_t = k_t = with_pos_embed(template, pos_template)
+        out_template = self.template_attn(q_t, k_t, template, src=template)
 
-        # Add skip connection, run through normalization and finally dropout
-        forward = self.feed_forward(x)
-        out = self.norm_ff(self.dropout_ff(forward) + x)
+        q_s = k_s = with_pos_embed(search, pos_search)
+        out_search = self.search_attn(q_s, k_s, search, src=search)
+
+        k_en_de = with_pos_embed(out_template, pos_template)
+        out = self.attn(out_search, k_en_de, out_template, src=out_search)
+        return out
+
+class GlobalAttention(nn.Module):
+    def __init__(self, attention_layer: nn.Module, num_layers):
+        super(GlobalAttention, self).__init__()
+        self.layers = getClones(attention_layer, num_layers)
+
+    def forward(self, features, pos):
+        out = features
+        for layer in self.layers:
+            q = k = with_pos_embed(out, pos)
+            out = layer(q, k, features, src=out)
         return out
 
 class Attention(nn.Module):
-    def __init__(self, attn_layer: nn.Module, num_layers: int, hidden_dims: int, out_channels:int, template_as_query: bool):
+    def __init__(self, attn_layer: nn.Module, num_global_layers: int, hidden_dims: int, out_channels:int):
         super(Attention, self).__init__()
-        self.layers = getClones(attn_layer, num_layers)
+
+        self.ende_atten = EncodeDecodeLayer(attn_layer)
+        self.self_attn = GlobalAttention(attn_layer, num_global_layers)
 
         self.head = nn.Sequential(
             nn.Conv2d(hidden_dims, hidden_dims, kernel_size=1, bias=False),
@@ -77,21 +83,15 @@ class Attention(nn.Module):
             nn.ReLU(inplace=True),
             nn.Conv2d(hidden_dims, out_channels, kernel_size=1)
         )
-        self.template_as_query = template_as_query
-        
+    
     def forward(self, 
                 kernel: Tensor, 
                 search: Tensor,
                 pos_kernel: Tensor,
                 pos_search: Tensor,
                 size) -> Tensor:
-        out = kernel if self.template_as_query else search
-        for layer in self.layers:
-            if self.template_as_query:
-                out = layer(out, search, pos_kernel, pos_search)
-            else:
-                out = layer(kernel, out, pos_kernel, pos_search)
-        
+        out = self.ende_atten(kernel, search, pos_kernel, pos_search)
+        out = self.self_attn(out, pos_search)
         # 49, 32, 256 => 32, 256, 7, 7
         hw, bs, c = out.shape
         h , w = size
@@ -99,19 +99,19 @@ class Attention(nn.Module):
         out = self.head(out)
         return out
 
+    
+
 class AttnRPN(RPN):
-    def __init__(self, attention_layer, hidden_dims, num_layers, anchor_num=5, template_as_query=True):
+    def __init__(self, attention_layer, hidden_dims, num_global_layers, anchor_num=5):
         super(AttnRPN, self).__init__()
-        self.cls = Attention(attention_layer, num_layers, hidden_dims, anchor_num*2, template_as_query)
-        self.loc = Attention(attention_layer, num_layers, hidden_dims, anchor_num*4, template_as_query)
-
+        self.cls = Attention(attention_layer, num_global_layers, hidden_dims, anchor_num*2)
+        self.loc = Attention(attention_layer, num_global_layers, hidden_dims, anchor_num*4)
         self.embedding = PositionEmbeddingSine(hidden_dims // 2)
-        self.template_as_query = template_as_query
-
+    
     def forward(self, z_f, x_f):
         # z_f [32, 256, 7, 7]
         # x_f [32, 256, 31, 31]
-        bs, c, h, w = z_f.shape if self.template_as_query else x_f.shape
+        bs, c, h, w = x_f.shape
 
         (pos_zf, _) = self.embedding(z_f)
         (pos_xf, _) = self.embedding(x_f)
@@ -127,7 +127,7 @@ class AttnRPN(RPN):
 
         return cls, loc
 
-class MultiAttnRPN(RPN):
+class MultiAttnRPNv2(RPN):
     def __init__(self, 
                 anchor_num, 
                 in_channels, 
@@ -137,14 +137,14 @@ class MultiAttnRPN(RPN):
                 num_layers=6,
                 dim_feed_forward=1024,
                 dropout=0.1,
-                template_as_query=True):
-        super(MultiAttnRPN, self).__init__()
-        attention_layer = AttentionLayer(hidden_dims, num_heads, dropout, dim_feed_forward, template_as_query)
+                ):
+        super(MultiAttnRPNv2, self).__init__()
+        attention_layer = AttentionLayer(hidden_dims, num_heads, dropout, dim_feed_forward)
 
         self.weighted = weighted
         for i in range(len(in_channels)):
             self.add_module('attnrpn'+str(i+2),
-                    AttnRPN(attention_layer, hidden_dims, num_layers, anchor_num, template_as_query))
+                    AttnRPN(attention_layer, hidden_dims, num_layers, anchor_num))
         if self.weighted:
             self.cls_weight = nn.Parameter(torch.ones(len(in_channels)))
             self.loc_weight = nn.Parameter(torch.ones(len(in_channels)))

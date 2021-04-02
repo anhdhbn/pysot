@@ -8,12 +8,14 @@ from __future__ import unicode_literals
 from pysot.models.head.mask import MaskCorr, Refine
 from pysot.models.head.rpn import UPChannelRPN, DepthwiseRPN, MultiRPN
 from pysot.models.head.attention import MultiAttnRPN
+from pysot.models.head.tr_attention import MultiAttnRPNv2
 
 RPNS = {
         'UPChannelRPN': UPChannelRPN,
         'DepthwiseRPN': DepthwiseRPN,
         'MultiRPN': MultiRPN,
-        'MultiAttnRPN': MultiAttnRPN
+        'MultiAttnRPN': MultiAttnRPN,
+        'MultiAttnRPNv2': MultiAttnRPNv2
        }
 
 MASKS = {
