@@ -15,7 +15,9 @@ class Video(object):
         self.gt_traj = gt_rect
         self.attr = attr
         self.pred_trajs = {}
-        self.img_names = [os.path.join(os.path.abspath(root), os.path.abspath(x)) for x in img_names]
+        if os.path.exists(os.path.join(os.path.abspath(root), os.path.abspath(img_names[0]))):
+            self.img_names = [os.path.join(os.path.abspath(root), os.path.abspath(x)) for x in img_names]
+        else: self.img_names = [os.path.join(os.path.abspath(root), x) for x in img_names]
         self.imgs = None
 
         if load_img:
