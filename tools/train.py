@@ -175,6 +175,10 @@ def train(train_loader, model, optimizer, lr_scheduler, tb_writer):
         os.makedirs(cfg.TRAIN.SNAPSHOT_DIR)
 
     logger.info("model\n{}".format(describe(model.module)))
+    model_parameters = filter(lambda p: p.requires_grad, model.parameters())
+    trainable_params = sum([np.prod(p.size()) for p in model_parameters])
+    params = sum([np.prod(p.size()) for p in model.parameters()])
+    print(f"Params: {trainable_params}/{params}")
     end = time.time()
     for idx, data in enumerate(train_loader):
         if epoch != idx // num_per_epoch + start_epoch:
