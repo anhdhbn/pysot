@@ -269,7 +269,7 @@ def main():
     cfg.merge_from_file(args.cfg)
     if rank == 0:
         log_dir = os.path.join(cfg.TRAIN.LOG_DIR, today)
-        if not os.path.exists(cfg.TRAIN.LOG_DIR):
+        if not os.path.exists(log_dir):
             os.makedirs(log_dir)
         init_log('global', logging.INFO)
         if cfg.TRAIN.LOG_DIR:
