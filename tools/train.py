@@ -274,7 +274,7 @@ def main():
         init_log('global', logging.INFO)
         if cfg.TRAIN.LOG_DIR:
             add_file_handler('global',
-                             log_dir,
+                             os.path.join(log_dir, 'logs.txt'),
                              logging.INFO)
 
         logger.info("Version Information: \n{}\n".format(commit()))
