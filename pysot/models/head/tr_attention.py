@@ -75,14 +75,9 @@ class Attention(nn.Module):
         super(Attention, self).__init__()
 
         self.ende_atten = EncodeDecodeLayer(attn_layer)
-        self.self_attn = GlobalAttention(attn_layer, num_global_layers)
+        # self.self_attn = GlobalAttention(attn_layer, num_global_layers)
 
-        self.head = nn.Sequential(
-            nn.Conv2d(hidden_dims, hidden_dims, kernel_size=1, bias=False),
-            nn.BatchNorm2d(hidden_dims),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(hidden_dims, out_channels, kernel_size=1)
-        )
+        self.head = nn.Conv2d(hidden_dims, out_channels, kernel_size=1)
     
     def forward(self, 
                 kernel: Tensor, 
@@ -91,7 +86,7 @@ class Attention(nn.Module):
                 pos_search: Tensor,
                 size) -> Tensor:
         out = self.ende_atten(kernel, search, pos_kernel, pos_search)
-        out = self.self_attn(out, pos_search)
+        # out = self.self_attn(out, pos_search)
         # 49, 32, 256 => 32, 256, 7, 7
         hw, bs, c = out.shape
         h , w = size
