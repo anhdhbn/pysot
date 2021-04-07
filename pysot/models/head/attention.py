@@ -68,12 +68,7 @@ class Attention(nn.Module):
         super(Attention, self).__init__()
         self.layers = getClones(attn_layer, num_layers)
 
-        self.head = nn.Sequential(
-            nn.Conv2d(hidden_dims, hidden_dims, kernel_size=1, bias=False),
-            nn.BatchNorm2d(hidden_dims),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(hidden_dims, out_channels, kernel_size=1)
-        )
+        self.head = nn.Conv2d(hidden_dims, out_channels, kernel_size=1)
         self.template_as_query = template_as_query
         
     def forward(self, 
